@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voxel Battle World - Fix v3</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #202020; user-select: none; }
+        
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: flex; flex-direction: column;
+        }
+        #top-bar { display: flex; justify-content: space-between; padding: 20px; pointer-events: auto; }
+
+        /* Controles Info */
+        #controls-info {
+            background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px; font-size: 13px;
+            border: 1px solid #444; width: 220px;
+        }
+        .key { background: #fff; color: #000; padding: 1px 5px; border-radius: 3px; font-weight: bold; margin-right: 4px; }
+        h3 { margin: 0 0 10px 0; color: #ffeb3b; text-transform: uppercase; font-size: 14px; }
+        
+        /* Estadísticas */
+        #my-stats {
+            background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px;
+            text-align: right; border: 1px solid #444; width: 200px;
+        }
+        #health-bar-container { width: 100%; height: 20px; background: #555; border-radius: 10px; overflow: hidden; margin-top: 5px; border: 2px solid white; }
+        #health-bar-fill { width: 100%; height: 100%; background: linear-gradient(90deg, #ff4444, #cc0000); transition: width 0.3s; }
+        #afk-timer { font-size: 10px; color: #aaa; margin-top: 5px; }
+
+        /* Paleta Bloques */
+        #block-palette {
+            margin-top: auto; background: rgba(0, 0, 0, 0.9); padding: 15px;
+            display: flex; justify-content: center; gap: 10px; pointer-events: auto; overflow-x: auto;
+            border-top: 2px solid #444;
+        }
+        .block-opt { display: flex; flex-direction: column; align-items: center; cursor: pointer; opacity: 0.6; transition: 0.2s; min-width: 50px; }
+        .block-opt:hover, .block-opt.active { opacity: 1; transform: scale(1.1); }
+        .block-opt.active .preview { border-color: #ffeb3b; box-shadow: 0 0 10px #ffeb3b; }
+        .preview { width: 32px; height: 32px; border: 2px solid #666; margin-bottom: 4px; border-radius: 4px; }
+        .block-name { color: #ccc; font-size: 10px; font-weight: bold; }
+
+        /* Notificaciones */
+        #notifications {
+            position: absolute; top: 100px; right: 20px; text-align: right; pointer-events: none;
+        }
+        .note { 
+            background: rgba(0,0,0,0.8); color: #81c784; padding: 10px; margin-bottom: 5px; border-radius: 5px; font-size: 14px; border-left: 4px solid #4CAF50;
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        /* Modales */
+        .modal {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95); display: flex; align-items: center; justify-content: center;
+            pointer-events: auto; z-index: 2000;
+        }
+        .modal-box {
+            background: #1a1a1a; padding: 40px; border-radius: 15px; text-align: center; color: white;
+            border: 2px solid #4CAF50; max-width: 400px; box-shadow: 0 0 50px rgba(76, 175, 80, 0.2);
+        }
+        input { padding: 12px; font-size: 18px; border-radius: 5px; border: none; margin: 20px 0; width: 80%; text-align: center; background: #333; color: white; }
+        button { padding: 12px 30px; font-size: 18px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        button:hover { background: #45a049; transform: scale(1.05); }
+
+        .dmg-popup { position: absolute; font-weight: bold; font-size: 20px; pointer-events: none; text-shadow: 2px 2px 0 #000; animation: floatUp 1s forwards; }
+        @keyframes floatUp { 0% { opacity:1; transform: translateY(0); } 100% { opacity:0; transform: translateY(-50px); } }
+        #afk-modal { display: none; background: rgba(50,0,0,0.95); }
+    </style>
+
+    <!-- Libs -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="top-bar">
+            <div id="controls-info">
+                <h3>🎮 Controles</h3>
+                <p><span class="key">WASD</span> Moverse</p>
+                <p><span class="key">SPACE</span> Saltar</p>
+                <p><span class="key">Q</span> <span class="key">E</span> Rotar Cámara</p>
+                <p><span class="key">1</span> Puñetazo/Patada (1-5 dmg)</p>
+                <p><span class="key">2</span> Bola de Fuego (10 dmg)</p>
+                <p><span class="key">CLICK</span> Poner Bloque (Max 3 uds. de dist.)</p>
+                <p><span class="key">SHIFT</span>+<span class="key">CLICK</span> Romper</p>
+            </div>
+            <div id="my-stats">
+                <div style="font-size: 20px; font-weight: bold;" id="display-name">Jugador</div>
+                <div id="health-bar-container"><div id="health-bar-fill"></div></div>
+                <div style="font-size:12px; margin-top:5px;">HP: <span id="hp-val">100</span>/100</div>
+                <div id="afk-timer">Tiempo inactivo: 0s</div>
+            </div>
+        </div>
+        <div id="notifications"></div>
+        <div id="block-palette"></div>
+    </div>
+
+    <!-- Login -->
+    <div id="login-modal" class="modal">
+        <div class="modal-box">
+            <h1 style="color:#4CAF50;">VOXEL BATTLE</h1>
+            <p>Construye, explora y combate.</p>
+            <input type="text" id="username" placeholder="Elige tu nombre" maxlength="10" autocomplete="off">
+            <button onclick="startGame()">ENTRAR AL MUNDO</button>
+        </div>
+    </div>
+
+    <!-- AFK -->
+    <div id="afk-modal" class="modal">
+        <div class="modal-box" style="border-color: #ff4444;">
+            <h1 style="color:#ff4444;">¡EXPULSADO!</h1>
+            <p>Inactivo por 60s. El mundo se ha limpiado.</p>
+            <button onclick="location.reload()" style="background:#ff4444;">RECONECTAR</button>
+        </div>
+    </div>
+
+<script>
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const auth = firebase.auth();
+const appId = __app_id || 'voxel-battle-fix-3'; // Updated app ID for clean start
+
+const BLOCK_TYPES = [
+    { id: 1, name: "Hierba", color: 0x7CFC00 },
+    { id: 2, name: "Piedra", color: 0x808080 },
+    { id: 3, name: "Madera", color: 0x8B4513 },
+    { id: 4, name: "Ladrillo", color: 0xB22222 },
+    { id: 5, name: "Cristal", color: 0xAEEEEE, opacity: 0.4, transparent: true },
+    { id: 6, name: "Obsidiana", color: 0x220022 },
+    { id: 7, name: "Oro", color: 0xFFD700, emissive: 0x333300 },
+    { id: 8, name: "Agua", color: 0x00BFFF, opacity: 0.6, transparent: true },
+];
+
+let camera, scene, renderer;
+let plane, rollOverMesh;
+let raycaster, mouse;
+let cameraAngle = 0;
+
+// Estado
+let myPlayerGroup, myPlayerId = null, myName = "Anon";
+let myHealth = 100, isDead = false;
+let lastActionTime = Date.now();
+// Límite de AFK cambiado a 60 segundos
+const AFK_LIMIT = 60000; 
+const AFK_LIMIT_SECONDS = AFK_LIMIT / 1000;
+
+// Objetos
+const worldBlocks = new Map();
+const objects = []; 
+const otherPlayers = {}; 
+const projectiles = [];
+
+// Inputs
+const keys = { w:false, a:false, s:false, d:false, space:false, shift:false };
+let selectedBlockId = 1;
+
+// --- Funciones de Utilidad ---
+
+/**
+ * Muestra una notificación temporal en la esquina superior derecha.
+ * @param {string} text El mensaje a mostrar.
+ */
+function addNotification(text) {
+    const n = document.createElement('div');
+    n.className = 'note'; n.innerText = text;
+    document.getElementById('notifications').appendChild(n);
+    setTimeout(() => n.remove(), 5000);
+}
+
+/**
+ * Comprueba si el jugador ha estado inactivo y lo expulsa si supera el límite.
+ */
+function checkAFK() {
+    if(isDead) return;
+    const idleTime = Date.now() - lastActionTime;
+    document.getElementById('afk-timer').innerText = `AFK: ${Math.floor(idleTime/1000)}s / ${AFK_LIMIT_SECONDS}s`;
+    
+    if (idleTime > AFK_LIMIT) {
+        document.getElementById('afk-modal').style.display = 'flex';
+        // Intenta eliminar el jugador de Firestore
+        db.collection('artifacts').doc(appId).collection('public').doc('data').collection('players').doc(myPlayerId).delete().catch(console.error);
+        isDead = true; 
+    }
+}
+
+/**
+ * Resetea el contador de inactividad (AFK).
+ */
+function resetAFK() { lastActionTime = Date.now(); }
+
+// --- Funciones de Inicialización y Flujo Principal ---
+
+async function startGame() {
+    const nameInput = document.getElementById('username');
+    if(!nameInput.value.trim()) { alert("¡Ponte un nombre!"); return; }
+    myName = nameInput.value.trim();
+    document.getElementById('display-name').innerText = myName;
+
+    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await auth.signInWithCustomToken(__initial_auth_token);
+    } else {
+        await auth.signInAnonymously();
+    }
+    myPlayerId = auth.currentUser.uid;
+    
+    // Check reset
+    await checkAndResetWorld();
+
+    document.getElementById('login-modal').style.display = 'none';
+
+    initUI();
+    init3D();
+    initMultiplayer();
+    animate();
+    setInterval(checkAFK, 1000);
+}
+
+// Reseteo inteligente del mundo (si está vacío)
+async function checkAndResetWorld() {
+    console.log("Comprobando actividad...");
+    const playersRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('players');
+    const snapshot = await playersRef.get();
+    
+    let activeCount = 0;
+    const now = Date.now();
+    // Usa el nuevo AFK_LIMIT para la comprobación
+    snapshot.forEach(doc => { if (doc.data().t && (now - doc.data().t) < AFK_LIMIT) activeCount++; });
+
+    if (activeCount === 0) {
+        addNotification("Mundo reiniciado (estaba vacío)");
+        const blocksRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blocks');
+        const blocksSnap = await blocksRef.get();
+        const batch = db.batch();
+        let count = 0;
+        blocksSnap.forEach(doc => { batch.delete(doc.ref); count++; if(count>450){batch.commit(); count=0;} });
+        if(count>0) await batch.commit();
+        
+        const pBatch = db.batch();
+        snapshot.forEach(doc => pBatch.delete(doc.ref));
+        await pBatch.commit();
+    } else {
+        addNotification("Unido a sesión activa");
+    }
+}
+
+function initUI() {
+    const palette = document.getElementById('block-palette');
+    BLOCK_TYPES.forEach(b => {
+        const div = document.createElement('div');
+        div.className = 'block-opt' + (b.id===1 ? ' active' : '');
+        div.onclick = () => {
+            selectedBlockId = b.id;
+            document.querySelectorAll('.block-opt').forEach(el => el.classList.remove('active'));
+            div.classList.add('active');
+            rollOverMesh.material.color.setHex(b.color);
+            resetAFK();
+        };
+        const prev = document.createElement('div');
+        prev.className = 'preview';
+        prev.style.backgroundColor = '#' + b.color.toString(16).padStart(6,'0');
+        if(b.opacity) prev.style.opacity = b.opacity;
+        div.append(prev, Object.assign(document.createElement('span'), {className:'block-name', innerText:b.name}));
+        palette.append(div);
+    });
+}
+
+function init3D() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x202020);
+    scene.fog = new THREE.Fog(0x202020, 20, 60);
+
+    const aspect = window.innerWidth / window.innerHeight;
+    const d = 18;
+    camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+    
+    scene.add(new THREE.AmbientLight(0x888888));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+    sun.position.set(50, 100, 50);
+    sun.castShadow = true;
+    scene.add(sun);
+
+    // Plano invisible para construir fuera del mapa (Y=-1.5)
+    const planeGeo = new THREE.PlaneGeometry(200, 200);
+    planeGeo.rotateX(-Math.PI/2);
+    plane = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ visible: false }));
+    plane.position.y = -1.5; 
+    scene.add(plane);
+    objects.push(plane);
+
+    rollOverMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1.05, 1.05, 1.05),
+        new THREE.MeshBasicMaterial({ color: BLOCK_TYPES[0].color, opacity: 0.5, transparent: true, wireframe: true })
+    );
+    scene.add(rollOverMesh);
+
+    spawnPlayer();
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    raycaster = new THREE.Raycaster();
+    mouse = new THREE.Vector2();
+    window.addEventListener('resize', onResize);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+
+    // Base local
+    for(let x=-8; x<=8; x++) for(let z=-8; z<=8; z++) createBlock(x, -1, z, 1);
+}
+
+function spawnPlayer() {
+    if(myPlayerGroup) scene.remove(myPlayerGroup);
+    myPlayerGroup = createHumanoid(0x00ff00); 
+    myPlayerGroup.position.set(0, 5, 0); 
+    scene.add(myPlayerGroup);
+    myHealth = 100; updateHealthUI(); isDead = false;
+}
+
+function createHumanoid(color) {
+    const group = new THREE.Group();
+    const skin = new THREE.MeshLambertMaterial({ color: 0xffccaa });
+    const clothes = new THREE.MeshLambertMaterial({ color: color });
+    
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), skin); head.position.y = 1.4;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.3), clothes); body.position.y = 0.9;
+    const armL = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.6, 0.15), skin); armL.position.set(-0.35, 0.9, 0);
+    const armR = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.6, 0.15), skin); armR.position.set(0.35, 0.9, 0);
+    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 0.2), new THREE.MeshLambertMaterial({color: 0x222222})); legL.position.set(-0.15, 0.3, 0);
+    const legR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 0.2), new THREE.MeshLambertMaterial({color: 0x222222})); legR.position.set(0.15, 0.3, 0);
+
+    group.add(head, body, armL, armR, legL, legR);
+    group.userData = { armL, armR, legL, legR, walkTime: 0, isAttacking: false };
+    
+    const canvas = document.createElement('canvas'); canvas.width = 100; canvas.height = 10;
+    const ctx = canvas.getContext('2d'); ctx.fillStyle = "#00ff00"; ctx.fillRect(0,0,100,10);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas) }));
+    sprite.position.y = 2.0; sprite.scale.set(1, 0.1, 1);
+    group.add(sprite); group.userData.hpBar = sprite;
+    return group;
+}
+
+function updateCameraPosition() {
+    if(!myPlayerGroup) return;
+    const rad = THREE.Math.degToRad(cameraAngle + 45); 
+    camera.position.x = myPlayerGroup.position.x + Math.sin(rad) * 20;
+    camera.position.z = myPlayerGroup.position.z + Math.cos(rad) * 20;
+    camera.position.y = myPlayerGroup.position.y + 20; 
+    camera.lookAt(myPlayerGroup.position);
+}
+
+let velocityY = 0;
+const GRAVITY = 0.05;
+
+function updatePhysics() {
+    if(isDead || !myPlayerGroup) return;
+    const moveSpeed = 0.15;
+    let dx = 0, dz = 0;
+    const rad = THREE.Math.degToRad(cameraAngle);
+    if(keys.w) { dx -= Math.sin(rad); dz -= Math.cos(rad); }
+    if(keys.s) { dx += Math.sin(rad); dz += Math.cos(rad); }
+    if(keys.a) { dx -= Math.cos(rad); dz -= -Math.sin(rad); }
+    if(keys.d) { dx += Math.cos(rad); dz += -Math.sin(rad); }
+
+    if(dx !== 0 || dz !== 0) {
+        const len = Math.sqrt(dx*dx + dz*dz); dx /= len; dz /= len;
+        myPlayerGroup.rotation.y = Math.atan2(dx, dz) + Math.PI;
+        myPlayerGroup.userData.walkTime += 0.3;
+        const s = Math.sin(myPlayerGroup.userData.walkTime);
+        myPlayerGroup.userData.legL.rotation.x = s * 0.5; myPlayerGroup.userData.legR.rotation.x = -s * 0.5;
+        if(!myPlayerGroup.userData.isAttacking) { myPlayerGroup.userData.armL.rotation.x = -s * 0.5; myPlayerGroup.userData.armR.rotation.x = s * 0.5; }
+        resetAFK();
+    } else {
+        myPlayerGroup.userData.legL.rotation.x = 0; myPlayerGroup.userData.legR.rotation.x = 0;
+    }
+
+    const nextX = myPlayerGroup.position.x + dx * moveSpeed;
+    const nextZ = myPlayerGroup.position.z + dz * moveSpeed;
+
+    if(!checkWall(nextX, myPlayerGroup.position.y, myPlayerGroup.position.z)) myPlayerGroup.position.x = nextX;
+    if(!checkWall(myPlayerGroup.position.x, myPlayerGroup.position.y, nextZ)) myPlayerGroup.position.z = nextZ;
+
+    if(keys.space && velocityY === 0) { velocityY = 0.6; resetAFK(); }
+    myPlayerGroup.position.y += velocityY; velocityY -= GRAVITY;
+
+    const footX = Math.round(myPlayerGroup.position.x);
+    const footY = Math.floor(myPlayerGroup.position.y); 
+    const footZ = Math.round(myPlayerGroup.position.z);
+    
+    const blockBelow = worldBlocks.get(`${footX},${footY},${footZ}`);
+    if(blockBelow || myPlayerGroup.position.y < -1) {
+        if(blockBelow) { myPlayerGroup.position.y = footY + 1; velocityY = 0; }
+        else if (myPlayerGroup.position.y < -30) takeDamage(100);
+    }
+}
+
+function checkWall(x, y, z) { return worldBlocks.has(`${Math.round(x)},${Math.round(y+1)},${Math.round(z)}`); }
+
+function performAttack(type) {
+    if(isDead) return;
+    myPlayerGroup.userData.isAttacking = true; resetAFK();
+    if(type === 'melee') {
+        const arm = Math.random() > 0.5 ? myPlayerGroup.userData.armL : myPlayerGroup.userData.armR;
+        arm.rotation.x = -Math.PI / 2;
+        setTimeout(() => { arm.rotation.x = 0; myPlayerGroup.userData.isAttacking = false; }, 300);
+        
+        const dir = new THREE.Vector3(0,0,1).applyAxisAngle(new THREE.Vector3(0,1,0), myPlayerGroup.rotation.y);
+        const ray = new THREE.Raycaster(myPlayerGroup.position.clone().add(new THREE.Vector3(0, 1, 0)), dir, 0, 2.5);
+        const hits = ray.intersectObjects(Object.values(otherPlayers).map(p=>p.mesh), true);
+        if(hits.length > 0) {
+            let tm = hits[0].object; while(tm.parent && tm.parent.type !== 'Scene') tm = tm.parent;
+            const tid = Object.keys(otherPlayers).find(k => otherPlayers[k].mesh === tm);
+            if(tid) {
+                const dmg = Math.floor(Math.random()*5)+1;
+                sendDamage(tid, dmg); showDamageNumber(hits[0].point, dmg, 'yellow');
+            }
+        }
+    }
+    if(type === 'fireball') {
+        myPlayerGroup.userData.armL.rotation.x = -Math.PI; myPlayerGroup.userData.armR.rotation.x = -Math.PI;
+        setTimeout(() => { myPlayerGroup.userData.armL.rotation.x = 0; myPlayerGroup.userData.armR.rotation.x = 0; myPlayerGroup.userData.isAttacking = false; }, 500);
+        const dir = new THREE.Vector3(0,0,1).applyAxisAngle(new THREE.Vector3(0,1,0), myPlayerGroup.rotation.y);
+        projectiles.push({ mesh: createProjectile(myPlayerGroup.position.clone().add(new THREE.Vector3(0, 1.5, 0))), dir, ownerId: myPlayerId, life: 100 });
+    }
+}
+
+function createProjectile(pos) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshBasicMaterial({color:0xff4400}));
+    m.position.copy(pos); scene.add(m); return m;
+}
+
+function updateProjectiles() {
+    for(let i = projectiles.length - 1; i >= 0; i--) {
+        const p = projectiles[i];
+        p.mesh.position.add(p.dir.clone().multiplyScalar(0.5)); p.life--;
+        let hit = false;
+        if(p.ownerId !== myPlayerId && !isDead) {
+            if(new THREE.Box3().setFromObject(p.mesh).intersectsBox(new THREE.Box3().setFromObject(myPlayerGroup))) { takeDamage(10); hit = true; }
+        }
+        if(!hit && worldBlocks.has(`${Math.round(p.mesh.position.x)},${Math.round(p.mesh.position.y)},${Math.round(p.mesh.position.z)}`)) hit = true;
+        if(hit || p.life <= 0) { scene.remove(p.mesh); projectiles.splice(i, 1); }
+    }
+}
+
+function sendDamage(targetId, amount) {
+    db.collection('artifacts').doc(appId).collection('public').doc('data').collection('damage_events').add({
+        targetId, amount, t: firebase.firestore.FieldValue.serverTimestamp()
+    });
+}
+
+function takeDamage(amount) {
+    myHealth = Math.max(0, myHealth - amount); updateHealthUI();
+    if(myHealth === 0 && !isDead) { isDead = true; alert("💀 Has Muerto"); spawnPlayer(); }
+    db.collection('artifacts').doc(appId).collection('public').doc('data').collection('players').doc(myPlayerId).update({ hp: myHealth });
+}
+
+function updateHealthUI() {
+    document.getElementById('health-bar-fill').style.width = myHealth + "%";
+    document.getElementById('hp-val').innerText = myHealth;
+}
+
+function showDamageNumber(pos, amount, color) {
+    const el = document.createElement('div');
+    el.className = 'dmg-popup'; el.innerText = "-" + amount; el.style.color = color;
+    const vec = pos.clone().project(camera);
+    el.style.left = ((vec.x * .5 + .5) * window.innerWidth) + 'px';
+    el.style.top = ((-(vec.y * .5) + .5) * window.innerHeight) + 'px';
+    document.body.appendChild(el); setTimeout(() => el.remove(), 1000);
+}
+
+// --- BLOQUES ---
+function createBlock(x, y, z, typeId) {
+    const key = `${x},${y},${z}`;
+    if(worldBlocks.has(key)) return;
+    const type = BLOCK_TYPES.find(b => b.id === typeId) || BLOCK_TYPES[0];
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial({ color: type.color, transparent: !!type.transparent, opacity: type.opacity||1 }));
+    mesh.position.set(x, y, z);
+    scene.add(mesh); objects.push(mesh); worldBlocks.set(key, mesh);
+}
+
+function removeBlock(x, y, z) {
+    const key = `${x},${y},${z}`;
+    const mesh = worldBlocks.get(key);
+    if(mesh) { scene.remove(mesh); objects.splice(objects.indexOf(mesh), 1); worldBlocks.delete(key); }
+}
+
+function onMouseMove(e) {
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1; mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(objects);
+    if(intersects.length > 0) {
+        // Cálculo Entero Preciso
+        const p = intersects[0].point.clone().add(intersects[0].face.normal.clone().multiplyScalar(0.5));
+        rollOverMesh.position.set(Math.round(p.x), Math.round(p.y), Math.round(p.z));
+        rollOverMesh.visible = true;
+    } else rollOverMesh.visible = false;
+}
+
+function onMouseDown(e) {
+    if(isDead || e.target.closest('#ui-layer div')) return;
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(objects);
+
+    if(intersects.length > 0) {
+        if(e.button === 0) {
+            const i = intersects[0];
+            
+            if(keys.shift) {
+                // Lógica de romper (Shift + Click)
+                if(i.object !== plane) {
+                    const p = i.object.position;
+                    db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blocks').doc(`${p.x},${p.y},${p.z}`).delete();
+                    removeBlock(p.x, p.y, p.z);
+                }
+            } else {
+                // Lógica de poner bloque (Click)
+                const p = i.point.clone().add(i.face.normal.clone().multiplyScalar(0.5));
+                const x = Math.round(p.x), y = Math.round(p.y), z = Math.round(p.z);
+                
+                // Player's current position (feet, float)
+                const px = myPlayerGroup.position.x;
+                const py = myPlayerGroup.position.y;
+                const pz = myPlayerGroup.position.z;
+
+                // --- INICIO DE CORRECCIÓN DE DISTANCIA ---
+                // 1. Verificar distancia de 3 bloques
+                // Usamos la posición redondeada del bloque en el que el jugador está parado como punto de referencia.
+                const px_r = Math.round(px);
+                const py_f = Math.floor(py); // La coordenada Y del bloque en el que está parado
+                const pz_r = Math.round(pz);
+
+                // Calculamos la distancia euclidiana al cuadrado entre el centro del nuevo bloque y el bloque de referencia del jugador
+                const distSq = (x - px_r) ** 2 + (y - py_f) ** 2 + (z - pz_r) ** 2;
+
+                if (distSq > 3 * 3) { // El límite es 9 (3^2)
+                    addNotification("¡Bloque demasiado lejos! Máximo 3 unidades de distancia.");
+                    return;
+                }
+                // --- FIN DE CORRECCIÓN DE DISTANCIA ---
+                
+                // 2. Verificar que el bloque no encierre a MI jugador (ya estaba)
+                const myPx = Math.round(px);
+                const myPy = Math.floor(py); // Usamos Math.floor para la posición de los pies
+                const myPz = Math.round(pz);
+                // Altura de mis pies (y) y mi cabeza (y+1)
+                if (x === myPx && z === myPz && (y === myPy || y === myPy + 1)) {
+                    addNotification("¡No puedes encerrarte a ti mismo!");
+                    return;
+                }
+                
+                // 3. Verificar que el bloque no encierre a OTRO jugador
+                for (const playerId in otherPlayers) {
+                    const otherPos = otherPlayers[playerId].mesh.position;
+                    const otherPx = Math.round(otherPos.x);
+                    const otherPy = Math.floor(otherPos.y); // Usamos Math.floor para la posición de los pies
+                    const otherPz = Math.round(otherPos.z);
+                    
+                    // Comprueba si el bloque se coloca en el espacio de los pies o cabeza del otro jugador
+                    if (x === otherPx && z === otherPz && (y === otherPy || y === otherPy + 1)) {
+                        addNotification("¡No puedes bloquear a otro jugador!");
+                        return;
+                    }
+                }
+                
+                // Si pasa todas las verificaciones
+                createBlock(x, y, z, selectedBlockId);
+                db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blocks').doc(`${x},${y},${z}`).set({ x, y, z, type:selectedBlockId });
+            }
+            resetAFK();
+        }
+    }
+}
+
+function onKeyDown(e) {
+    if(isDead) return;
+    const k = e.key.toLowerCase();
+    if(k==='w') keys.w=true; if(k==='s') keys.s=true; if(k==='a') keys.a=true; if(k==='d') keys.d=true;
+    if(k===' ') keys.space=true; if(k==='shift') { keys.shift=true; rollOverMesh.material.color.setHex(0xff0000); }
+    if(k==='q') { cameraAngle-=90; resetAFK(); } if(k==='e') { cameraAngle+=90; resetAFK(); }
+    if(k==='1') performAttack('melee'); if(k==='2') performAttack('fireball');
+}
+function onKeyUp(e) {
+    const k = e.key.toLowerCase();
+    if(k==='w') keys.w=false; if(k==='s') keys.s=false; if(k==='a') keys.a=false; if(k==='d') keys.d=false;
+    if(k===' ') keys.space=false; if(k==='shift') { keys.shift=false; rollOverMesh.material.color.setHex(BLOCK_TYPES.find(b=>b.id===selectedBlockId).color); }
+}
+
+function initMultiplayer() {
+    db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blocks').onSnapshot(s => {
+        s.docChanges().forEach(c => {
+            const d = c.doc.data();
+            if(c.type==='added') createBlock(d.x, d.y, d.z, d.type);
+            if(c.type==='removed') { const [x,y,z] = c.doc.id.split(',').map(Number); removeBlock(x,y,z); }
+        });
+    });
+    db.collection('artifacts').doc(appId).collection('public').doc('data').collection('players').onSnapshot(s => {
+        s.docChanges().forEach(c => {
+            if(c.doc.id===myPlayerId) return;
+            if(c.type==='removed') { if(otherPlayers[c.doc.id]) { scene.remove(otherPlayers[c.doc.id].mesh); delete otherPlayers[c.doc.id]; } }
+            else updateOtherPlayer(c.doc.id, c.doc.data());
+        });
+    });
+    db.collection('artifacts').doc(appId).collection('public').doc('data').collection('damage_events').where('targetId', '==', myPlayerId).onSnapshot(s => {
+        s.docChanges().forEach(c => {
+            if(c.type==='added') { const d = c.doc.data(); if(d.t && Math.abs(Date.now()-d.t.toMillis())<2000) { takeDamage(d.amount); showDamageNumber(myPlayerGroup.position, d.amount, 'red'); } }
+        });
+    });
+    setInterval(() => {
+        if(isDead || !myPlayerGroup) return;
+        const p = myPlayerGroup.position;
+        db.collection('artifacts').doc(appId).collection('public').doc('data').collection('players').doc(myPlayerId).set({
+            x:p.x, y:p.y, z:p.z, rot:myPlayerGroup.rotation.y, hp:myHealth, name:myName, t:Date.now()
+        }, {merge:true});
+    }, 100);
+}
+
+function updateOtherPlayer(id, data) {
+    if(!otherPlayers[id]) {
+        const mesh = createHumanoid(0xff0000); scene.add(mesh);
+        const cv = document.createElement('canvas'); cv.width=200; cv.height=50;
+        const cx = cv.getContext('2d'); cx.font="bold 30px Arial"; cx.fillStyle="white"; cx.fillText(data.name||"Enemy",50,40);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv)})); sp.position.y=2.5; sp.scale.set(2,0.5,1); mesh.add(sp);
+        otherPlayers[id] = { mesh };
+    }
+    const e = otherPlayers[id]; e.mesh.position.set(data.x, data.y, data.z); e.mesh.rotation.y = data.rot;
+    if(data.hp!==undefined) {
+        const ctx = e.mesh.userData.hpBar.material.map.image.getContext('2d');
+        ctx.fillStyle="#555"; ctx.fillRect(0,0,100,10); ctx.fillStyle=data.hp>50?"#00ff00":"red"; ctx.fillRect(0,0,data.hp,10);
+        e.mesh.userData.hpBar.material.map.needsUpdate=true;
+    }
+}
+
+function onResize() {
+    const a = window.innerWidth/window.innerHeight; const d = 18;
+    camera.left=-d*a; camera.right=d*a; camera.top=d; camera.bottom=-d;
+    camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+}
+function animate() { requestAnimationFrame(animate); if(!isDead && myPlayerGroup) { updatePhysics(); updateCameraPosition(); updateProjectiles(); } renderer.render(scene, camera); }
+</script>
+</body>
+</html>
