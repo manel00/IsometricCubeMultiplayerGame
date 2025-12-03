@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Voxel Battle World - Fix v3</title>
+    <title>Voxel Battle - Fixed Movement</title>
     <style>
         body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #202020; user-select: none; }
         
@@ -72,7 +72,6 @@
         #afk-modal { display: none; background: rgba(50,0,0,0.95); }
     </style>
 
-    <!-- Libs -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
@@ -87,10 +86,11 @@
                 <p><span class="key">WASD</span> Moverse</p>
                 <p><span class="key">SPACE</span> Saltar</p>
                 <p><span class="key">Q</span> <span class="key">E</span> Rotar Cámara</p>
-                <p><span class="key">1</span> Puñetazo/Patada (1-5 dmg)</p>
-                <p><span class="key">2</span> Bola de Fuego (10 dmg)</p>
-                <p><span class="key">CLICK</span> Poner Bloque (Max 3 uds. de dist.)</p>
+                <p><span class="key">1</span> Puñetazo (1-5 dmg)</p>
+                <p><span class="key">2</span> Bola Fuego (10 dmg)</p>
+                <p><span class="key">CLICK</span> Poner Bloque</p>
                 <p><span class="key">SHIFT</span>+<span class="key">CLICK</span> Romper</p>
+                <p><span class="key">R</span> Respawn Rápido</p>
             </div>
             <div id="my-stats">
                 <div style="font-size: 20px; font-weight: bold;" id="display-name">Jugador</div>
@@ -103,7 +103,6 @@
         <div id="block-palette"></div>
     </div>
 
-    <!-- Login -->
     <div id="login-modal" class="modal">
         <div class="modal-box">
             <h1 style="color:#4CAF50;">VOXEL BATTLE</h1>
@@ -113,7 +112,6 @@
         </div>
     </div>
 
-    <!-- AFK -->
     <div id="afk-modal" class="modal">
         <div class="modal-box" style="border-color: #ff4444;">
             <h1 style="color:#ff4444;">¡EXPULSADO!</h1>
@@ -123,11 +121,18 @@
     </div>
 
 <script>
-const firebaseConfig = JSON.parse(__firebase_config);
+// ==========================================
+// 1. CONFIGURACIÓN DE FIREBASE (¡EDITA ESTO!)
+// ==========================================
+const firebaseConfig = {};
+
+// ==========================================
+// 2. INICIALIZACIÓN
+// ==========================================
 const app = firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const auth = firebase.auth();
-const appId = __app_id || 'voxel-battle-fix-3'; // Updated app ID for clean start
+const appId = 'voxel-battle-fix-move'; 
 
 const BLOCK_TYPES = [
     { id: 1, name: "Hierba", color: 0x7CFC00 },
@@ -149,26 +154,19 @@ let cameraAngle = 0;
 let myPlayerGroup, myPlayerId = null, myName = "Anon";
 let myHealth = 100, isDead = false;
 let lastActionTime = Date.now();
-// Límite de AFK cambiado a 60 segundos
 const AFK_LIMIT = 60000; 
-const AFK_LIMIT_SECONDS = AFK_LIMIT / 1000;
 
-// Objetos
 const worldBlocks = new Map();
 const objects = []; 
 const otherPlayers = {}; 
 const projectiles = [];
 
-// Inputs
+// Inputs (Corrección aplicada: se limpian al perder foco)
 const keys = { w:false, a:false, s:false, d:false, space:false, shift:false };
 let selectedBlockId = 1;
 
 // --- Funciones de Utilidad ---
 
-/**
- * Muestra una notificación temporal en la esquina superior derecha.
- * @param {string} text El mensaje a mostrar.
- */
 function addNotification(text) {
     const n = document.createElement('div');
     n.className = 'note'; n.innerText = text;
@@ -176,28 +174,21 @@ function addNotification(text) {
     setTimeout(() => n.remove(), 5000);
 }
 
-/**
- * Comprueba si el jugador ha estado inactivo y lo expulsa si supera el límite.
- */
 function checkAFK() {
     if(isDead) return;
     const idleTime = Date.now() - lastActionTime;
-    document.getElementById('afk-timer').innerText = `AFK: ${Math.floor(idleTime/1000)}s / ${AFK_LIMIT_SECONDS}s`;
+    document.getElementById('afk-timer').innerText = `AFK: ${Math.floor(idleTime/1000)}s`;
     
     if (idleTime > AFK_LIMIT) {
         document.getElementById('afk-modal').style.display = 'flex';
-        // Intenta eliminar el jugador de Firestore
-        db.collection('artifacts').doc(appId).collection('public').doc('data').collection('players').doc(myPlayerId).delete().catch(console.error);
+        db.collection('artifacts').doc(appId).collection('public').doc('data').collection('players').doc(myPlayerId).delete().catch(()=>{});
         isDead = true; 
     }
 }
 
-/**
- * Resetea el contador de inactividad (AFK).
- */
 function resetAFK() { lastActionTime = Date.now(); }
 
-// --- Funciones de Inicialización y Flujo Principal ---
+// --- Funciones de Inicialización ---
 
 async function startGame() {
     const nameInput = document.getElementById('username');
@@ -205,50 +196,42 @@ async function startGame() {
     myName = nameInput.value.trim();
     document.getElementById('display-name').innerText = myName;
 
-    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await auth.signInWithCustomToken(__initial_auth_token);
-    } else {
+    try {
         await auth.signInAnonymously();
+        myPlayerId = auth.currentUser.uid;
+        await checkAndResetWorld();
+        document.getElementById('login-modal').style.display = 'none';
+
+        initUI();
+        init3D();
+        initMultiplayer();
+        animate();
+        setInterval(checkAFK, 1000);
+
+    } catch (error) {
+        console.error(error);
+        alert("Error de conexión. Revisa la consola y tu configuración de Firebase.");
     }
-    myPlayerId = auth.currentUser.uid;
-    
-    // Check reset
-    await checkAndResetWorld();
-
-    document.getElementById('login-modal').style.display = 'none';
-
-    initUI();
-    init3D();
-    initMultiplayer();
-    animate();
-    setInterval(checkAFK, 1000);
 }
 
-// Reseteo inteligente del mundo (si está vacío)
 async function checkAndResetWorld() {
-    console.log("Comprobando actividad...");
+    // Si el mundo está vacío, limpiar bloques viejos
     const playersRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('players');
     const snapshot = await playersRef.get();
-    
     let activeCount = 0;
     const now = Date.now();
-    // Usa el nuevo AFK_LIMIT para la comprobación
     snapshot.forEach(doc => { if (doc.data().t && (now - doc.data().t) < AFK_LIMIT) activeCount++; });
 
     if (activeCount === 0) {
         addNotification("Mundo reiniciado (estaba vacío)");
-        const blocksRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blocks');
-        const blocksSnap = await blocksRef.get();
         const batch = db.batch();
+        const blocksSnap = await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blocks').get();
         let count = 0;
         blocksSnap.forEach(doc => { batch.delete(doc.ref); count++; if(count>450){batch.commit(); count=0;} });
         if(count>0) await batch.commit();
-        
         const pBatch = db.batch();
         snapshot.forEach(doc => pBatch.delete(doc.ref));
         await pBatch.commit();
-    } else {
-        addNotification("Unido a sesión activa");
     }
 }
 
@@ -288,7 +271,6 @@ function init3D() {
     sun.castShadow = true;
     scene.add(sun);
 
-    // Plano invisible para construir fuera del mapa (Y=-1.5)
     const planeGeo = new THREE.PlaneGeometry(200, 200);
     planeGeo.rotateX(-Math.PI/2);
     plane = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ visible: false }));
@@ -317,6 +299,11 @@ function init3D() {
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
+    
+    // CORRECCIÓN CRÍTICA: Limpiar teclas si se pierde el foco
+    window.addEventListener('blur', () => {
+        keys.w = false; keys.a = false; keys.s = false; keys.d = false; keys.space = false; keys.shift = false;
+    });
 
     // Base local
     for(let x=-8; x<=8; x++) for(let z=-8; z<=8; z++) createBlock(x, -1, z, 1);
@@ -325,9 +312,16 @@ function init3D() {
 function spawnPlayer() {
     if(myPlayerGroup) scene.remove(myPlayerGroup);
     myPlayerGroup = createHumanoid(0x00ff00); 
-    myPlayerGroup.position.set(0, 5, 0); 
+    myPlayerGroup.position.set(0, 5, 0); // Spawnea arriba para caer en la base
     scene.add(myPlayerGroup);
-    myHealth = 100; updateHealthUI(); isDead = false;
+    
+    // CORRECCIÓN CRÍTICA: Reiniciar variables al nacer
+    myHealth = 100; 
+    updateHealthUI(); 
+    isDead = false;
+    
+    // IMPORTANTÍSIMO: Detener cualquier movimiento anterior
+    keys.w = false; keys.a = false; keys.s = false; keys.d = false; keys.space = false;
 }
 
 function createHumanoid(color) {
@@ -403,7 +397,10 @@ function updatePhysics() {
     const blockBelow = worldBlocks.get(`${footX},${footY},${footZ}`);
     if(blockBelow || myPlayerGroup.position.y < -1) {
         if(blockBelow) { myPlayerGroup.position.y = footY + 1; velocityY = 0; }
-        else if (myPlayerGroup.position.y < -30) takeDamage(100);
+        else if (myPlayerGroup.position.y < -30) {
+            // Muerte por caída
+            takeDamage(100);
+        }
     }
 }
 
@@ -462,8 +459,16 @@ function sendDamage(targetId, amount) {
 }
 
 function takeDamage(amount) {
+    if(isDead) return;
     myHealth = Math.max(0, myHealth - amount); updateHealthUI();
-    if(myHealth === 0 && !isDead) { isDead = true; alert("💀 Has Muerto"); spawnPlayer(); }
+    if(myHealth === 0) { 
+        isDead = true; 
+        // Pequeño delay para evitar bloqueo de teclas inmediato
+        setTimeout(() => {
+            alert("💀 Has Muerto"); 
+            spawnPlayer(); 
+        }, 100);
+    }
     db.collection('artifacts').doc(appId).collection('public').doc('data').collection('players').doc(myPlayerId).update({ hp: myHealth });
 }
 
@@ -502,7 +507,6 @@ function onMouseMove(e) {
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObjects(objects);
     if(intersects.length > 0) {
-        // Cálculo Entero Preciso
         const p = intersects[0].point.clone().add(intersects[0].face.normal.clone().multiplyScalar(0.5));
         rollOverMesh.position.set(Math.round(p.x), Math.round(p.y), Math.round(p.z));
         rollOverMesh.visible = true;
@@ -519,63 +523,26 @@ function onMouseDown(e) {
             const i = intersects[0];
             
             if(keys.shift) {
-                // Lógica de romper (Shift + Click)
                 if(i.object !== plane) {
                     const p = i.object.position;
                     db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blocks').doc(`${p.x},${p.y},${p.z}`).delete();
                     removeBlock(p.x, p.y, p.z);
                 }
             } else {
-                // Lógica de poner bloque (Click)
                 const p = i.point.clone().add(i.face.normal.clone().multiplyScalar(0.5));
                 const x = Math.round(p.x), y = Math.round(p.y), z = Math.round(p.z);
                 
-                // Player's current position (feet, float)
-                const px = myPlayerGroup.position.x;
-                const py = myPlayerGroup.position.y;
-                const pz = myPlayerGroup.position.z;
+                const px = Math.round(myPlayerGroup.position.x);
+                const py = Math.floor(myPlayerGroup.position.y);
+                const pz = Math.round(myPlayerGroup.position.z);
 
-                // --- INICIO DE CORRECCIÓN DE DISTANCIA ---
-                // 1. Verificar distancia de 3 bloques
-                // Usamos la posición redondeada del bloque en el que el jugador está parado como punto de referencia.
-                const px_r = Math.round(px);
-                const py_f = Math.floor(py); // La coordenada Y del bloque en el que está parado
-                const pz_r = Math.round(pz);
-
-                // Calculamos la distancia euclidiana al cuadrado entre el centro del nuevo bloque y el bloque de referencia del jugador
-                const distSq = (x - px_r) ** 2 + (y - py_f) ** 2 + (z - pz_r) ** 2;
-
-                if (distSq > 3 * 3) { // El límite es 9 (3^2)
-                    addNotification("¡Bloque demasiado lejos! Máximo 3 unidades de distancia.");
-                    return;
-                }
-                // --- FIN DE CORRECCIÓN DE DISTANCIA ---
+                const distSq = (x - px) ** 2 + (y - py) ** 2 + (z - pz) ** 2;
+                if (distSq > 9) { addNotification("Demasiado lejos"); return; }
                 
-                // 2. Verificar que el bloque no encierre a MI jugador (ya estaba)
-                const myPx = Math.round(px);
-                const myPy = Math.floor(py); // Usamos Math.floor para la posición de los pies
-                const myPz = Math.round(pz);
-                // Altura de mis pies (y) y mi cabeza (y+1)
-                if (x === myPx && z === myPz && (y === myPy || y === myPy + 1)) {
-                    addNotification("¡No puedes encerrarte a ti mismo!");
-                    return;
+                if (x === px && z === pz && (y === py || y === py + 1)) {
+                    addNotification("¡No te encierres!"); return;
                 }
                 
-                // 3. Verificar que el bloque no encierre a OTRO jugador
-                for (const playerId in otherPlayers) {
-                    const otherPos = otherPlayers[playerId].mesh.position;
-                    const otherPx = Math.round(otherPos.x);
-                    const otherPy = Math.floor(otherPos.y); // Usamos Math.floor para la posición de los pies
-                    const otherPz = Math.round(otherPos.z);
-                    
-                    // Comprueba si el bloque se coloca en el espacio de los pies o cabeza del otro jugador
-                    if (x === otherPx && z === otherPz && (y === otherPy || y === otherPy + 1)) {
-                        addNotification("¡No puedes bloquear a otro jugador!");
-                        return;
-                    }
-                }
-                
-                // Si pasa todas las verificaciones
                 createBlock(x, y, z, selectedBlockId);
                 db.collection('artifacts').doc(appId).collection('public').doc('data').collection('blocks').doc(`${x},${y},${z}`).set({ x, y, z, type:selectedBlockId });
             }
@@ -591,6 +558,7 @@ function onKeyDown(e) {
     if(k===' ') keys.space=true; if(k==='shift') { keys.shift=true; rollOverMesh.material.color.setHex(0xff0000); }
     if(k==='q') { cameraAngle-=90; resetAFK(); } if(k==='e') { cameraAngle+=90; resetAFK(); }
     if(k==='1') performAttack('melee'); if(k==='2') performAttack('fireball');
+    if(k==='r') { myPlayerGroup.position.set(0,5,0); velocityY=0; } // Tecla R de emergencia
 }
 function onKeyUp(e) {
     const k = e.key.toLowerCase();
